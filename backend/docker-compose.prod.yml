@@ -1,0 +1,11 @@
+services:
+  api:
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      LOG_LEVEL: INFO
+      TEMP_ROOT: /app/tmp
+      UVICORN_WORKERS: "1"
+    volumes:
+      - apk_tmp:/app/tmp
