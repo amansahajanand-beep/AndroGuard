@@ -72,6 +72,36 @@ def get_credentials_by_email(email: str) -> tuple[UserProfile, str] | None:
         session.close()
 
 
+def get_credentials_by_id(user_id: str) -> tuple[UserProfile, str] | None:
+    if engine is None or SessionLocal is None:
+        return None
+    session = SessionLocal()
+    try:
+        row = session.get(User, user_id)
+        return None if row is None else (_to_profile(row), row.password_hash)
+    finally:
+        session.close()
+
+
+def set_password_hash(user_id: str, password_hash: str) -> bool:
+    if engine is None or SessionLocal is None:
+        return False
+    session = SessionLocal()
+    try:
+        row = session.get(User, user_id)
+        if row is None:
+            return False
+        row.password_hash = password_hash
+        session.commit()
+        return True
+    except Exception:
+        session.rollback()
+        logger.exception("Failed to update password")
+        raise
+    finally:
+        session.close()
+
+
 def get_user_by_id(user_id: str) -> UserProfile | None:
     if engine is None or SessionLocal is None:
         return None

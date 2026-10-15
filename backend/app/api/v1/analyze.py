@@ -4,18 +4,18 @@ import asyncio
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 from pydantic import ValidationError
 
+from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.errors import AppError
-from app.db.repository import persist_analysis, persist_screenshots
-from app.db.session import engine
 from app.schemas.analysis import AppSubmission
+from app.schemas.auth import UserProfile
 from app.services.analysis_service import analyze_apk
-from app.storage.images import read_local_screenshots
+from app.services.ai_report import attach_ai_review
+from app.services.artifacts import publish_static_artifacts
 from app.storage.local import LocalTempStorage
-from app.storage.s3 import upload_screenshots
 from app.utils.files import new_job_id, safe_filename
 from app.utils.hashing import stream_to_file
 
@@ -24,6 +24,21 @@ router = APIRouter()
 storage = LocalTempStorage()
 
 ALLOWED_SUFFIXES = {".apk"}
+
+
+async def read_policy_upload(upload: UploadFile | None) -> tuple[str | None, str | None]:
+    """Text of an uploaded privacy policy, or (None, reason). Never fails the audit."""
+    if upload is None or not upload.filename:
+        return None, None
+    from app.services.policy_text import MAX_BYTES, extract_policy_text
+
+    try:
+        data = await upload.read(MAX_BYTES + 1)
+    finally:
+        await upload.close()
+    if len(data) > MAX_BYTES:
+        return None, "The privacy policy file is too large to read."
+    return extract_policy_text(upload.filename, data)
 
 
 def _validate_filename(filename: str | None) -> str:
@@ -41,6 +56,8 @@ def _build_submission(
     app_description: str | None,
     privacy_policy: str | None,
     play_store_url: str | None,
+    policy_text: str | None = None,
+    policy_error: str | None = None,
 ) -> AppSubmission:
     try:
         return AppSubmission(
@@ -48,6 +65,8 @@ def _build_submission(
             app_description=app_description,
             privacy_policy=privacy_policy,
             play_store_url=play_store_url,
+            privacy_policy_text=policy_text,
+            privacy_policy_error=policy_error,
         )
     except ValidationError as exc:
         field = ".".join(str(part) for part in exc.errors()[0]["loc"]) or "submission"
@@ -64,9 +83,14 @@ async def analyze(
     app_description: str | None = Form(default=None),
     privacy_policy: str | None = Form(default=None),
     play_store_url: str | None = Form(default=None),
+    privacy_policy_file: UploadFile | None = File(default=None),
+    user: UserProfile = Depends(get_current_user),
 ) -> dict:
     original_name = _validate_filename(file.filename)
-    submission = _build_submission(app_name, app_description, privacy_policy, play_store_url)
+    policy_text, policy_error = await read_policy_upload(privacy_policy_file)
+    submission = _build_submission(
+        app_name, app_description, privacy_policy, play_store_url, policy_text, policy_error
+    )
     job_id = new_job_id()
     apk_path = storage.apk_path(job_id)
     try:
@@ -96,33 +120,15 @@ async def analyze(
                 "APK analysis exceeded the allowed time limit.",
                 http_status=504,
             ) from exc
-        blobs = read_local_screenshots(
-            job_id,
-            [item.file_name for item in result.data.screenshots],
-            storage,
+        result.data.analysis.id = job_id
+        # Network + model calls: keep them off the event loop.
+        await asyncio.to_thread(
+            attach_ai_review,
+            result,
+            policy_text=submission.privacy_policy_text,
+            policy_error=submission.privacy_policy_error,
         )
-        if settings.s3_enabled and blobs:
-            try:
-                formats = {item.file_name: item.format for item in result.data.screenshots}
-                urls = upload_screenshots(job_id, blobs, formats)
-                for item in result.data.screenshots:
-                    if item.file_name in urls:
-                        item.url = urls[item.file_name]
-            except Exception:
-                logger.exception("Could not upload screenshots for %s to S3", job_id)
-                result.data.analysis.warnings.append(
-                    "Analysis completed but screenshots were not uploaded to S3."
-                )
-        if engine is not None:
-            try:
-                persist_analysis(job_id, result)
-                persist_screenshots(job_id, result.data.screenshots, blobs)
-                result.data.analysis.persisted = True
-            except Exception:
-                logger.exception("Could not save analysis %s to PostgreSQL", job_id)
-                result.data.analysis.warnings.append(
-                    "Analysis completed but was not saved to the database."
-                )
+        publish_static_artifacts(job_id, result, storage, user_id=user.id)
         return result.model_dump()
     finally:
         await file.close()

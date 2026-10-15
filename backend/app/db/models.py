@@ -42,6 +42,7 @@ class AnalysisRecord(Base):
     __tablename__ = "analyses"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     sha256: Mapped[str] = mapped_column(String(64), index=True)
     package_name: Mapped[str | None] = mapped_column(String(256), index=True, nullable=True)
     file_name: Mapped[str] = mapped_column(String(512))
@@ -88,6 +89,7 @@ class AnalysisJob(Base):
     __tablename__ = "analysis_jobs"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     status: Mapped[str] = mapped_column(String(24), index=True)
     stage: Mapped[str] = mapped_column(String(40))
     progress: Mapped[int] = mapped_column(Integer, default=0)
@@ -97,6 +99,8 @@ class AnalysisJob(Base):
     package_name: Mapped[str | None] = mapped_column(String(256), index=True, nullable=True)
     exploration_requested: Mapped[bool] = mapped_column(Boolean, default=False)
     result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    intervention: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    exploration_checkpoint: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -147,3 +151,96 @@ class ExplorationScreenshot(Base):
         server_default=func.now(),
         nullable=False,
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 11: screenshot run / exploration / HITL persistence
+# (Additive — does not replace screenshot_files or exploration_screenshots.)
+# ---------------------------------------------------------------------------
+
+
+class ScreenshotRun(Base):
+    """One exploration screenshot campaign for an analysis job."""
+
+    __tablename__ = "screenshot_runs"
+
+    run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    app_id: Mapped[str] = mapped_column(String(256), index=True)
+    job_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("analysis_jobs.id", ondelete="CASCADE"),
+        index=True,
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), index=True, default="running")
+    total_screenshots: Mapped[int] = mapped_column(Integer, default=0)
+    total_pages: Mapped[int] = mapped_column(Integer, default=0)
+    total_ad_variations: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class Screenshot(Base):
+    """One published exploration screenshot (S3 metadata + ad labels)."""
+
+    __tablename__ = "screenshots"
+    __table_args__ = (
+        UniqueConstraint("run_id", "state_id", name="uq_screenshots_run_state"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("screenshot_runs.run_id", ondelete="CASCADE"),
+        index=True,
+    )
+    page: Mapped[str] = mapped_column(String(256), index=True, default="unknown")
+    state_id: Mapped[str] = mapped_column(String(128), index=True)
+    s3_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    trigger_action: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    ad_detected: Mapped[bool] = mapped_column(Boolean, default=False)
+    ad_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ad_position: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+
+class HumanIntervention(Base):
+    """Persisted HITL pause / resolution for an analysis job run."""
+
+    __tablename__ = "human_interventions"
+
+    intervention_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    job_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("analysis_jobs.id", ondelete="CASCADE"),
+        index=True,
+    )
+    run_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("screenshot_runs.run_id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+    type: Mapped[str] = mapped_column(String(64), index=True)
+    title: Mapped[str] = mapped_column(String(256), default="Human action required")
+    message: Mapped[str] = mapped_column(Text, default="")
+    screenshot_s3_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), index=True, default="waiting")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolution: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    timeout_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

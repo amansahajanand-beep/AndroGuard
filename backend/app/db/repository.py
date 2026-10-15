@@ -11,12 +11,13 @@ from app.schemas.analysis import AnalysisResponse, ScreenshotInfo
 logger = logging.getLogger(__name__)
 
 
-def persist_analysis(job_id: str, response: AnalysisResponse) -> None:
+def persist_analysis(job_id: str, response: AnalysisResponse, user_id: str | None = None) -> None:
     if engine is None or SessionLocal is None:
         return
     payload = response.model_dump()
     record = AnalysisRecord(
         id=job_id,
+        user_id=user_id,
         sha256=response.data.apk.sha256,
         package_name=response.data.apk.package_name,
         file_name=response.data.apk.file_name,
@@ -37,13 +38,14 @@ def persist_analysis(job_id: str, response: AnalysisResponse) -> None:
         session.close()
 
 
-def get_analysis(job_id: str) -> dict | None:
+def get_analysis(job_id: str, user_id: str) -> dict | None:
+    """Return the stored result only when it belongs to ``user_id``."""
     if engine is None or SessionLocal is None:
         return None
     session = SessionLocal()
     try:
         record = session.get(AnalysisRecord, job_id)
-        if record is None:
+        if record is None or record.user_id != user_id:
             return None
         return record.result
     finally:
@@ -57,13 +59,14 @@ def _submitted_app_name(result: dict | None) -> str | None:
     return submission.get("app_name") if isinstance(submission, dict) else None
 
 
-def list_analyses(limit: int = 20) -> list[dict]:
+def list_analyses(user_id: str, limit: int = 20) -> list[dict]:
     if engine is None or SessionLocal is None:
         return []
     session = SessionLocal()
     try:
         stmt = (
             select(AnalysisRecord)
+            .where(AnalysisRecord.user_id == user_id)
             .order_by(AnalysisRecord.created_at.desc())
             .limit(min(limit, 100))
         )
@@ -81,6 +84,23 @@ def list_analyses(limit: int = 20) -> list[dict]:
             }
             for row in rows
         ]
+    finally:
+        session.close()
+
+
+def job_owner_id(job_id: str) -> str | None:
+    """Owner of a job/analysis, or None when unknown or unowned (legacy rows)."""
+    if engine is None or SessionLocal is None:
+        return None
+    from app.db.models import AnalysisJob
+
+    session = SessionLocal()
+    try:
+        job = session.get(AnalysisJob, job_id)
+        if job is not None and job.user_id:
+            return job.user_id
+        record = session.get(AnalysisRecord, job_id)
+        return record.user_id if record is not None else None
     finally:
         session.close()
 

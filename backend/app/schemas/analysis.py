@@ -22,6 +22,9 @@ class AppSubmission(BaseModel):
     privacy_policy: str | None = Field(default=None, max_length=1024)
     privacy_policy_kind: str | None = None
     play_store_url: str | None = Field(default=None, max_length=1024)
+    # Text of an uploaded policy, kept in memory for the AI comparison only (never stored or returned).
+    privacy_policy_text: str | None = Field(default=None, exclude=True)
+    privacy_policy_error: str | None = Field(default=None, exclude=True)
 
     @field_validator("*", mode="before")
     @classmethod
@@ -259,6 +262,8 @@ class AnalysisMeta(BaseModel):
 
 
 class AnalysisData(BaseModel):
+    ai_review: dict | None = None
+    ai_policy_analysis: dict | None = None
     apk: ApkIdentity
     submission: AppSubmission = Field(default_factory=AppSubmission)
     manifest: ManifestInfo
