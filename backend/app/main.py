@@ -54,7 +54,7 @@ async def handle_app_error(request: Request, exc: AppError):
 @app.exception_handler(RequestValidationError)
 async def handle_validation(request: Request, exc: RequestValidationError):
     request_id = getattr(request.state, "request_id", None)
-    if request.url.path.endswith(("/analyze", "/analyze-apk")):
+    if request.url.path.endswith("/analyze"):
         return JSONResponse(
             status_code=400,
             content=error_body("INVALID_FILE", "The request is missing a valid APK upload.", request_id),
@@ -73,80 +73,3 @@ async def handle_validation(request: Request, exc: RequestValidationError):
 @app.exception_handler(Exception)
 async def handle_unhandled(request: Request, exc: Exception):
     return await unhandled_error_handler(request, exc)
-
-
-def _cli(argv: list[str] | None = None) -> int:
-    """Lightweight CLI entry for debug commands (does not start the API server).
-
-    Examples::
-
-        python -m app.main --inspect-ui
-        python -m app.main --screenshot
-        python -m app.main --compare-screenshot
-        python -m app.main --explore --package com.example.app
-        python -m app.main --explore-ads --package com.example.app
-        python -m app.main --detect-ad --image path/to/shot.png
-    """
-    import argparse
-    import sys
-
-    from app.workers.detect_ad_cli import run_detect_ad_cli
-    from app.workers.explore_cli import run_explore_cli
-    from app.workers.inspect_ui import inspect_ui
-    from app.workers.screenshot_cli import run_screenshot_cli
-
-    parser = argparse.ArgumentParser(
-        prog="python -m app.main",
-        description="AndroGuard backend helpers (API is started via uvicorn).",
-    )
-    parser.add_argument(
-        "--inspect-ui",
-        action="store_true",
-        help="Dump the UI hierarchy of a connected Android device via UIAutomator.",
-    )
-    parser.add_argument(
-        "--screenshot",
-        action="store_true",
-        help="Capture a device screenshot (Phase 3).",
-    )
-    parser.add_argument(
-        "--compare-screenshot",
-        action="store_true",
-        help="Compare two screenshots / visual states (Phase 3).",
-    )
-    parser.add_argument(
-        "--explore",
-        action="store_true",
-        help="Run deterministic UI exploration (Phase 4).",
-    )
-    parser.add_argument(
-        "--explore-ads",
-        action="store_true",
-        help="Run multi-pass advertisement placement discovery (Phase 5).",
-    )
-    parser.add_argument(
-        "--detect-ad",
-        action="store_true",
-        help="Detect advertisements in a screenshot (Phase 6).",
-    )
-    args, remainder = parser.parse_known_args(argv)
-    if args.inspect_ui:
-        return inspect_ui(["--inspect-ui", *remainder])
-    if args.screenshot:
-        return run_screenshot_cli(["--screenshot", *remainder])
-    if args.compare_screenshot:
-        return run_screenshot_cli(["--compare-screenshot", *remainder])
-    if args.detect_ad:
-        return run_detect_ad_cli(["--detect-ad", *remainder])
-    if args.explore_ads:
-        return run_explore_cli(["--explore-ads", *remainder])
-    if args.explore:
-        return run_explore_cli(["--explore", *remainder])
-    parser.print_help()
-    print("\nStart the API with: uvicorn app.main:app --reload --host 0.0.0.0 --port 8000")
-    return 0 if argv in (None, []) else 2
-
-if __name__ == "__main__":
-    import sys
-
-    sys.exit(_cli())

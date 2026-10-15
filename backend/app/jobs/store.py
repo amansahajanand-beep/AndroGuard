@@ -7,7 +7,7 @@ from typing import Any, Protocol
 
 from app.core.config import settings
 from app.db.session import SessionLocal, engine
-from app.jobs.models import JobRecord, JobStage, JobStatus, coerce_job_status, progress_for
+from app.jobs.models import JobRecord, JobStage, JobStatus, progress_for
 
 logger = logging.getLogger(__name__)
 
@@ -67,14 +67,11 @@ class InMemoryJobStore:
             return _apply(record, changes)
 
     def mark_stage(self, job_id: str, stage: JobStage) -> JobRecord | None:
-        status = JobStatus.RUNNING
-        if stage is JobStage.WAITING_FOR_HUMAN:
-            status = JobStatus.WAITING_FOR_HUMAN
         return self.update(
             job_id,
             stage=stage,
             progress=progress_for(stage),
-            status=status,
+            status=JobStatus.PROCESSING,
         )
 
     def mark_completed(self, job_id: str, result: dict[str, Any]) -> JobRecord | None:
@@ -111,7 +108,7 @@ class PostgresJobStore:
     def _to_record(self, row: Any) -> JobRecord:
         return JobRecord(
             id=row.id,
-            status=coerce_job_status(row.status),
+            status=JobStatus(row.status),
             stage=JobStage(row.stage),
             progress=row.progress or 0,
             file_name=row.file_name,
@@ -122,8 +119,6 @@ class PostgresJobStore:
             result=row.result,
             error_code=row.error_code,
             error_message=row.error_message,
-            intervention=getattr(row, "intervention", None),
-            exploration_checkpoint=getattr(row, "exploration_checkpoint", None),
             created_at=row.created_at,
             updated_at=row.updated_at,
             started_at=row.started_at,
@@ -190,13 +185,10 @@ class PostgresJobStore:
             session.close()
 
     def mark_stage(self, job_id: str, stage: JobStage) -> JobRecord | None:
-        status = JobStatus.RUNNING
-        if stage is JobStage.WAITING_FOR_HUMAN:
-            status = JobStatus.WAITING_FOR_HUMAN
         changes: dict[str, Any] = {
             "stage": stage,
             "progress": progress_for(stage),
-            "status": status,
+            "status": JobStatus.PROCESSING,
         }
         if stage is JobStage.STATIC_ANALYSIS:
             changes["started_at"] = datetime.now(timezone.utc)

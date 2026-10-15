@@ -9,10 +9,13 @@ from pydantic import ValidationError
 
 from app.core.config import settings
 from app.core.errors import AppError
+from app.db.repository import persist_analysis, persist_screenshots
+from app.db.session import engine
 from app.schemas.analysis import AppSubmission
 from app.services.analysis_service import analyze_apk
-from app.services.artifacts import publish_static_artifacts
+from app.storage.images import read_local_screenshots
 from app.storage.local import LocalTempStorage
+from app.storage.s3 import upload_screenshots
 from app.utils.files import new_job_id, safe_filename
 from app.utils.hashing import stream_to_file
 
@@ -93,7 +96,33 @@ async def analyze(
                 "APK analysis exceeded the allowed time limit.",
                 http_status=504,
             ) from exc
-        publish_static_artifacts(job_id, result, storage)
+        blobs = read_local_screenshots(
+            job_id,
+            [item.file_name for item in result.data.screenshots],
+            storage,
+        )
+        if settings.s3_enabled and blobs:
+            try:
+                formats = {item.file_name: item.format for item in result.data.screenshots}
+                urls = upload_screenshots(job_id, blobs, formats)
+                for item in result.data.screenshots:
+                    if item.file_name in urls:
+                        item.url = urls[item.file_name]
+            except Exception:
+                logger.exception("Could not upload screenshots for %s to S3", job_id)
+                result.data.analysis.warnings.append(
+                    "Analysis completed but screenshots were not uploaded to S3."
+                )
+        if engine is not None:
+            try:
+                persist_analysis(job_id, result)
+                persist_screenshots(job_id, result.data.screenshots, blobs)
+                result.data.analysis.persisted = True
+            except Exception:
+                logger.exception("Could not save analysis %s to PostgreSQL", job_id)
+                result.data.analysis.warnings.append(
+                    "Analysis completed but was not saved to the database."
+                )
         return result.model_dump()
     finally:
         await file.close()
