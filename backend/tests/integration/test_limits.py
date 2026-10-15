@@ -65,4 +65,4 @@ def test_corrupt_manifest_zip(client: TestClient) -> None:
 def test_unknown_file_404(client: TestClient) -> None:
     response = client.get("/api/v1/files/11111111-1111-1111-1111-111111111111/missing.png")
     assert response.status_code == 404
-    assert response.json()["error"]["code"] == "INVALID_FILE"
+    assert response.json()["error"]["code"] == "NOT_FOUND"

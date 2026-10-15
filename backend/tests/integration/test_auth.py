@@ -49,13 +49,13 @@ def test_login_requires_password(client: TestClient) -> None:
     assert response.json()["error"]["details"][0]["field"] == "password"
 
 
-def test_me_without_token_is_unauthorized(client: TestClient) -> None:
-    response = client.get("/api/v1/auth/me")
+def test_me_without_token_is_unauthorized(anon_client: TestClient) -> None:
+    response = anon_client.get("/api/v1/auth/me")
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "UNAUTHORIZED"
 
 
-def test_me_with_garbage_token_is_unauthorized(client: TestClient) -> None:
-    response = client.get("/api/v1/auth/me", headers={"Authorization": "Bearer nonsense"})
+def test_me_with_garbage_token_is_unauthorized(anon_client: TestClient) -> None:
+    response = anon_client.get("/api/v1/auth/me", headers={"Authorization": "Bearer nonsense"})
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "UNAUTHORIZED"
