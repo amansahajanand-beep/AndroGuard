@@ -41,11 +41,26 @@ def init_engine() -> Engine | None:
 
 
 def init_db() -> None:
+    from app.db.migrations import apply_migrations
     from app.db.models import Base
 
     if engine is None:
         return
     Base.metadata.create_all(bind=engine)
+    # Best-effort additive columns for Phase 7 HITL on existing deployments.
+    for stmt in (
+        "ALTER TABLE analysis_jobs ADD COLUMN IF NOT EXISTS intervention JSONB",
+        "ALTER TABLE analysis_jobs ADD COLUMN IF NOT EXISTS exploration_checkpoint JSONB",
+    ):
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(stmt))
+        except Exception:
+            logger.debug("Optional schema alter skipped: %s", stmt, exc_info=True)
+    try:
+        apply_migrations(engine)
+    except Exception:
+        logger.exception("Phase 11 schema migrations failed")
     logger.info("PostgreSQL schema is ready.")
 
 

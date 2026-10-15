@@ -52,19 +52,44 @@ class ExplorationScreenshotInfo(BaseModel):
     file_name: str
     url: str | None = None
     s3_key: str | None = None
+    screenshot_id: str | None = None
     state_id: str | None = None
+    page: str | None = None
     width: int | None = None
     height: int | None = None
     format: str | None = None
     byte_size: int | None = None
     sha256: str | None = None
     captured_at: str | None = None
+    triggering_action: str | None = None
+    ad_detected: bool = False
+    ad_type: str | None = None
+    ad_position: str | None = None
+    confidence: float | None = None
+    upload_error: str | None = None
 
 
 class AdPlacement(BaseModel):
-    """One advertisement occurrence located on a discovered screen."""
+    """One advertisement occurrence / unique placement variation.
 
+    Phase 5 uniqueness is driven by page + ad_type + relative geometry + trigger,
+    not by screenshot pixel identity. ``relative_bbox`` is
+    ``[left, top, width, height]`` in ``[0, 1]`` of the screen.
+    """
+
+    page: str | None = None
+    ad_detected: bool = True
     ad_type: AdType = "unknown"
+    position: str | None = Field(
+        default=None,
+        description="Coarse band: top | bottom | middle | fullscreen | unknown.",
+    )
+    relative_bbox: list[float] | None = Field(
+        default=None,
+        description="[left, top, width, height] relative to the screen (0..1).",
+    )
+    uniqueness_key: str | None = None
+    trigger_action: str | None = None
     network: str | None = None
     sdk_class: str | None = None
     bounds: Bounds | None = None
@@ -141,6 +166,8 @@ class ExplorationResult(BaseModel):
     screenshots: list[ExplorationScreenshotInfo] = Field(default_factory=list)
     ad_placements: list[AdPlacement] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    # Phase 8 metadata (URLs / keys only — never base64 image bodies).
+    screenshot_records: list[dict[str, Any]] = Field(default_factory=list)
 
     @classmethod
     def skipped(cls, reason: str) -> "ExplorationResult":
